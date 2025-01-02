@@ -24,7 +24,7 @@ add_action('plugins_loaded', function () {
     require_once $base . '/includes/tweak-disable-oembed.php';
     require_once $base . '/includes/tweak-lazyload-iframes.php';
     require_once $base . '/includes/wp-admin-language-switch.php';
-    require_once $base . '/includes/wp-defer-scripts.php';
+//    require_once $base . '/includes/wp-defer-scripts.php';
     require_once $base . '/includes/wp-remove-emoji.php';
     require_once $base . '/includes/yoast-sitemap-images.php';
 });
