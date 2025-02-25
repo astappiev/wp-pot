@@ -20,6 +20,8 @@ add_action('plugins_loaded', function () {
     $base = dirname(__FILE__);
     require_once $base . '/includes/clean-head.php';
     require_once $base . '/includes/cyr2lat.php';
+    require_once $base . '/includes/disable-author-archives.php';
+    require_once $base . '/includes/disable-pingbacks.php';
     require_once $base . '/includes/fix-pidar-flag.php';
     require_once $base . '/includes/tweak-disable-oembed.php';
     require_once $base . '/includes/tweak-lazyload-iframes.php';
@@ -28,3 +30,5 @@ add_action('plugins_loaded', function () {
     require_once $base . '/includes/wp-remove-emoji.php';
     require_once $base . '/includes/yoast-sitemap-images.php';
 });
+
+add_filter( 'sanitize_file_name', 'mb_strtolower' );
