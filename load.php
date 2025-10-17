@@ -16,6 +16,8 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
 }
 
+define('WP_POT_VERSION', '1.0.0');
+
 add_action('plugins_loaded', function () {
     $base = dirname(__FILE__);
     require_once $base . '/includes/clean-head.php';
@@ -23,6 +25,8 @@ add_action('plugins_loaded', function () {
     require_once $base . '/includes/disable-author-archives.php';
     require_once $base . '/includes/disable-pingbacks.php';
     require_once $base . '/includes/fix-pidar-flag.php';
+    require_once $base . '/includes/media-meta.php';
+    require_once $base . '/includes/media-replace.php';
     require_once $base . '/includes/tweak-disable-oembed.php';
     require_once $base . '/includes/tweak-lazyload-iframes.php';
     require_once $base . '/includes/wp-admin-language-switch.php';
