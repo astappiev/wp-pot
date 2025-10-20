@@ -25,6 +25,7 @@ add_action('plugins_loaded', function () {
     require_once $base . '/includes/disable-author-archives.php';
     require_once $base . '/includes/disable-pingbacks.php';
     require_once $base . '/includes/fix-pidar-flag.php';
+	require_once $base . '/includes/local-avatars.php';
     require_once $base . '/includes/media-meta.php';
     require_once $base . '/includes/media-replace.php';
     require_once $base . '/includes/tweak-disable-oembed.php';

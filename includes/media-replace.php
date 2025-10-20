@@ -2,7 +2,7 @@
 
 add_action( 'admin_enqueue_scripts', 'pot_media_replace_enqueue_scripts' );
 function pot_media_replace_enqueue_scripts() {
-	wp_enqueue_script( 'wp-pot-media-replace', plugins_url( '../assets/js/media-replace.js', __FILE__ ), [], WP_POT_VERSION, true );
+	wp_enqueue_script( 'wp-pot-media-replace', plugins_url( '../assets/js/media-replace.js', __FILE__ ), [ 'jquery' ], WP_POT_VERSION, true );
 }
 
 add_action( 'edit_attachment', 'pot_media_replace_edit_attachment' );
