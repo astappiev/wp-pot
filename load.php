@@ -34,6 +34,10 @@ add_action('plugins_loaded', function () {
 //    require_once $base . '/includes/wp-defer-scripts.php';
     require_once $base . '/includes/wp-remove-emoji.php';
     require_once $base . '/includes/yoast-sitemap-images.php';
+
+	require_once $base . '/commands/clean-uploads.php';
+	require_once $base . '/commands/nginx-cache-flush.php';
+	require_once $base . '/commands/replace-siteurl.php';
 });
 
 add_filter( 'sanitize_file_name', 'mb_strtolower' );
