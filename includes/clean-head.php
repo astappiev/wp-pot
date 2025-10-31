@@ -17,6 +17,8 @@ add_action('init', function () {
     remove_action('wp_head', 'rsd_link');
     // Remove Windows Live Writer manifest
     remove_action('wp_head', 'wlwmanifest_link');
+	// Disable comments feed
+	add_filter('feed_links_show_comments_feed', '__return_false');
 
     // Remove the generators from RSS feeds as well
     add_filter('the_generator', '__return_false');
