@@ -69,6 +69,32 @@ add_action( 'cli_init', function () {
 
 		if ( $result->return_code === 0 ) {
 			WP_CLI::success( "Successfully replaced '{$db_url}' with '{$config_url}' in all tables." );
+
+			// Check and update Polylang domains
+			$polylang = get_option( 'polylang' );
+			if ( is_array( $polylang ) && isset( $polylang['domains'] ) && is_array( $polylang['domains'] ) ) {
+				$old_host = parse_url( $db_url, PHP_URL_HOST );
+				$new_host = parse_url( $config_url, PHP_URL_HOST );
+
+				if ( $old_host && $new_host ) {
+					$changed = false;
+					foreach ( $polylang['domains'] as $lang => $domain ) {
+						if ( strpos( $domain, $old_host ) !== false ) {
+							$new_domain = str_replace( $old_host, $new_host, $domain );
+							if ( $domain !== $new_domain ) {
+								$polylang['domains'][ $lang ] = $new_domain;
+								$changed                      = true;
+								WP_CLI::log( "Updated Polylang domain for {$lang}: {$domain} -> {$new_domain}" );
+							}
+						}
+					}
+
+					if ( $changed ) {
+						update_option( 'polylang', $polylang );
+						WP_CLI::success( 'Polylang domains updated.' );
+					}
+				}
+			}
 		} else {
 			if ( ! empty( $result->stderr ) ) {
 				WP_CLI::log( $result->stderr );
