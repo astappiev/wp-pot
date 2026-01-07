@@ -1,24 +1,27 @@
 <?php
-/**
- * Module Name: Replace Site URL
- * Description: Check the site URL used in database and in wp-config.php and replace if needed. Useful when migrating a site to a new domain (e.g. from staging to production).
- */
 
-add_action( 'cli_init', function () {
+namespace Pot\CLI;
 
-	$args = [
-		'shortdesc' => 'Check and replace site URL from database with the one from wp-config.php',
-		'synopsis'  => [
-			[
-				'type'        => 'flag',
-				'name'        => 'yes',
-				'description' => 'Answer yes to the confirmation message.',
-				'optional'    => true,
-			],
-		],
-	];
+use WP_CLI;
 
-	WP_CLI::add_command( 'replace-siteurl', function ( $args, $assoc_args ) {
+class Sync {
+
+	/**
+	 * Check and replace site URL from database with the one from wp-config.php.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--yes]
+	 * : Answer yes to the confirmation message.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp pot-sync siteurl
+	 *     wp pot-sync siteurl --yes
+	 *
+	 * @when after_wp_load
+	 */
+	public function siteurl( $args, $assoc_args ): void {
 		global $wpdb;
 
 		// Get current URL from database (stored in options table)
@@ -28,8 +31,6 @@ add_action( 'cli_init', function () {
 
 		if ( empty( $db_url ) ) {
 			WP_CLI::error( 'Could not retrieve siteurl from database.' );
-
-			return;
 		}
 
 		// Get current URL from wp-config.php (WP_HOME constant)
@@ -37,8 +38,6 @@ add_action( 'cli_init', function () {
 
 		if ( empty( $config_url ) ) {
 			WP_CLI::error( 'Could not retrieve home URL from configuration.' );
-
-			return;
 		}
 
 		WP_CLI::log( "Database URL: {$db_url}" );
@@ -101,6 +100,5 @@ add_action( 'cli_init', function () {
 			}
 			WP_CLI::error( 'Search-replace operation failed.' );
 		}
-	}, $args );
-
-} );
+	}
+}

@@ -1,9 +1,3 @@
-/**
- * Author: WP Zone
- * License: GNU General Public License version 3 or later
- * License URI: https://www.gnu.org/licenses/gpl-3.0.html
- */
-
 function pot_media_replace() {
 
 	frame = wp.media({
