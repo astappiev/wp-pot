@@ -35,13 +35,7 @@ abstract class POT_Module {
 			return true;
 		}
 
-		foreach ( $this->required_plugins as $plugin ) {
-			if ( is_plugin_active( $plugin ) ) {
-				return true;
-			}
-		}
-
-		return false;
+		return array_any( $this->required_plugins, fn( $plugin ) => is_plugin_active( $plugin ) );
 	}
 
 	public function get_slug(): string {

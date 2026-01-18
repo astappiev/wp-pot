@@ -122,7 +122,7 @@ class Media_Replace extends POT_Module {
 	public function calculate_image_srcset( $sources ): array {
 		if ( is_admin() ) {
 			foreach ( $sources as $size => $source ) {
-				$source['url']    .= ( strpos( $source['url'], '?' ) === false ? '?' : '&' ) . '_t=' . time();
+				$source['url']    .= ( ! str_contains( $source['url'], '?' ) ? '?' : '&' ) . '_t=' . time();
 				$sources[ $size ] = $source;
 			}
 		}
@@ -130,9 +130,13 @@ class Media_Replace extends POT_Module {
 		return $sources;
 	}
 
-	public function get_attachment_image_src( $attr ): array {
+	public function get_attachment_image_src( $attr ): array|false {
+		if ( $attr === false ) {
+			return false;
+		}
+
 		if ( is_admin() && ! empty( $attr[0] ) ) {
-			$attr[0] .= ( strpos( $attr[0], '?' ) === false ? '?' : '&' ) . '_t=' . time();
+			$attr[0] .= ( ! str_contains( $attr[0], '?' ) ? '?' : '&' ) . '_t=' . time();
 		}
 
 		return $attr;
@@ -140,12 +144,12 @@ class Media_Replace extends POT_Module {
 
 	public function prepare_attachment_for_js( $response ): array {
 		if ( is_admin() ) {
-			if ( strpos( $response['url'], '?' ) !== false ) {
-				$response['url'] .= ( strpos( $response['url'], '?' ) === false ? '?' : '&' ) . '_t=' . time();
+			if ( str_contains( $response['url'], '?' ) ) {
+				$response['url'] .= ( ! str_contains( $response['url'], '?' ) ? '?' : '&' ) . '_t=' . time();
 			}
 			if ( isset( $response['sizes'] ) ) {
 				foreach ( $response['sizes'] as $sizeName => $size ) {
-					$response['sizes'][ $sizeName ]['url'] .= ( strpos( $size['url'], '?' ) === false ? '?' : '&' ) . '_t=' . time();
+					$response['sizes'][ $sizeName ]['url'] .= ( ! str_contains( $size['url'], '?' ) ? '?' : '&' ) . '_t=' . time();
 				}
 			}
 		}

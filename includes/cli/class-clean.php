@@ -2,9 +2,10 @@
 
 namespace Pot\CLI;
 
+use WP_CLI;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use WP_CLI;
+use FilesystemIterator;
 
 class Clean {
 
@@ -38,7 +39,7 @@ class Clean {
 			WP_CLI::error( 'Could not find uploads directory.' );
 		}
 
-		WP_CLI::log( "Scanning uploads directory: {$uploads_dir}" );
+		WP_CLI::log( "Scanning uploads directory: $uploads_dir" );
 
 		// Get all registered attachment files from WordPress database
 		$registered_files = $this->get_registered_files();
@@ -159,7 +160,7 @@ class Clean {
 	private function scan_directory( string $dir ): array {
 		$files    = [];
 		$iterator = new RecursiveIteratorIterator(
-			new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ),
+			new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
 			RecursiveIteratorIterator::SELF_FIRST
 		);
 
@@ -216,7 +217,7 @@ class Clean {
 			$registered_base     = preg_replace( '/-scaled$/', '', $registered_base );
 
 			// If same directory and same base name, consider it registered
-			if ( $dir === $registered_dir && strpos( $filename, $registered_base ) === 0 ) {
+			if ( $dir === $registered_dir && str_starts_with( $filename, $registered_base ) ) {
 				return true;
 			}
 		}
@@ -225,7 +226,7 @@ class Clean {
 	}
 
 	/**
-	 * Format bytes to human readable format.
+	 * Format bytes to human-readable format.
 	 */
 	private function format_bytes( int $bytes, int $precision = 2 ): string {
 		$units = [ 'B', 'KB', 'MB', 'GB', 'TB' ];
@@ -242,7 +243,7 @@ class Clean {
 	 */
 	private function cleanup_empty_directories( string $dir ): void {
 		$iterator = new RecursiveIteratorIterator(
-			new RecursiveDirectoryIterator( $dir, RecursiveDirectoryIterator::SKIP_DOTS ),
+			new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
 			RecursiveIteratorIterator::CHILD_FIRST
 		);
 

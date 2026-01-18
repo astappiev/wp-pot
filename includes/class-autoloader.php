@@ -39,7 +39,7 @@ class Autoloader {
 	 *
 	 * @return void
 	 */
-	public function addNamespace( $prefix, $base_dir, $prepend = false ): void {
+	public function addNamespace( string $prefix, string $base_dir, bool $prepend = false ): void {
 		$prefix   = trim( $prefix, '\\' ) . '\\';
 		$base_dir = rtrim( $base_dir, DIRECTORY_SEPARATOR ) . '/';
 		if ( isset( $this->prefixes[ $prefix ] ) === false ) {
@@ -61,7 +61,7 @@ class Autoloader {
 	 * @return mixed The mapped file name on success, or boolean false on
 	 * failure.
 	 */
-	public function loadClass( $class ): mixed {
+	public function loadClass( string $class ): mixed {
 		$prefix = $class;
 
 		while ( false !== ( $pos = strrpos( $prefix, '\\' ) ) ) {

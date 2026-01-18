@@ -7,7 +7,7 @@ defined( '\\ABSPATH' ) || exit;
 class Registry {
 	private const string OPTION_KEY = 'wp_pot_modules';
 	private array $modules = [];
-	private array $module_states = [];
+	private array $module_states;
 
 	public function __construct() {
 		$this->module_states = get_option( self::OPTION_KEY, [] );

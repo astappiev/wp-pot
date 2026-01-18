@@ -3,11 +3,14 @@
 namespace Pot\Modules;
 
 use Pot\POT_Module;
+use WP_Comment;
+use WP_Post;
+use WP_User;
 
 defined( '\\ABSPATH' ) || exit;
 
 class Local_Avatars extends POT_Module {
-	private const AVATAR_META_KEY = 'pot_local_avatar';
+	private const string AVATAR_META_KEY = 'pot_local_avatar';
 
 	protected string $name = 'Local Avatars';
 	protected string $description = 'Allows users to upload custom avatars from the media library.';
@@ -40,7 +43,7 @@ class Local_Avatars extends POT_Module {
 
 	public function add_avatar_field( $user ): void {
 		$avatar_id  = get_user_meta( $user->ID, self::AVATAR_META_KEY, true );
-		$avatar_url = $avatar_id ? wp_get_attachment_image_url( $avatar_id, 'thumbnail' ) : '';
+		$avatar_url = $avatar_id ? wp_get_attachment_image_url( $avatar_id ) : '';
 		?>
 		<h2><?php esc_html_e( 'Profile Picture', 'wp-pot' ); ?></h2>
 		<table class="form-table">
@@ -95,7 +98,7 @@ class Local_Avatars extends POT_Module {
 			return $url;
 		}
 
-		$size       = isset( $args['size'] ) ? $args['size'] : 96;
+		$size       = $args['size'] ?? 96;
 		$avatar_url = wp_get_attachment_image_url( $avatar_id, [ $size, $size ] );
 
 		return $avatar_url ?: $url;
@@ -114,18 +117,18 @@ class Local_Avatars extends POT_Module {
 		return $avatar;
 	}
 
-	private function get_user_from_id_or_email( $id_or_email ) {
+	private function get_user_from_id_or_email( $id_or_email ): WP_User|false {
 		$user = false;
 
 		if ( is_numeric( $id_or_email ) ) {
 			$user = get_user_by( 'id', absint( $id_or_email ) );
 		} elseif ( is_string( $id_or_email ) ) {
 			$user = get_user_by( 'email', $id_or_email );
-		} elseif ( $id_or_email instanceof \WP_User ) {
+		} elseif ( $id_or_email instanceof WP_User ) {
 			$user = $id_or_email;
-		} elseif ( $id_or_email instanceof \WP_Post ) {
+		} elseif ( $id_or_email instanceof WP_Post ) {
 			$user = get_user_by( 'id', $id_or_email->post_author );
-		} elseif ( $id_or_email instanceof \WP_Comment ) {
+		} elseif ( $id_or_email instanceof WP_Comment ) {
 			if ( ! empty( $id_or_email->user_id ) ) {
 				$user = get_user_by( 'id', $id_or_email->user_id );
 			}

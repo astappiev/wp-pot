@@ -78,7 +78,7 @@ class Sync {
 				if ( $old_host && $new_host ) {
 					$changed = false;
 					foreach ( $polylang['domains'] as $lang => $domain ) {
-						if ( strpos( $domain, $old_host ) !== false ) {
+						if ( str_contains( $domain, $old_host ) ) {
 							$new_domain = str_replace( $old_host, $new_host, $domain );
 							if ( $domain !== $new_domain ) {
 								$polylang['domains'][ $lang ] = $new_domain;
