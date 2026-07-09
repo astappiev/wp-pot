@@ -39,6 +39,7 @@ add_action( 'plugins_loaded', function () {
 		\Pot\Modules\Admin_Language_Switch::class,
 		\Pot\Modules\Clean_Head::class,
 		\Pot\Modules\Cyr2lat::class,
+		\Pot\Modules\Hidden_Post_Status::class,
 		\Pot\Modules\Defer_Scripts::class,
 		\Pot\Modules\Disable_Author_Archives::class,
 		\Pot\Modules\Disable_Oembed::class,
