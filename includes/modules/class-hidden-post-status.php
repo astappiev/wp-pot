@@ -39,7 +39,11 @@ class Hidden_Post_Status extends POT_Module {
 		);
 	}
 
-	public function classic_editor_js( \WP_Post $post ): void {
+	public function classic_editor_js( $post = null ): void {
+		if ( ! $post instanceof \WP_Post ) {
+			return;
+		}
+
 		$is_hidden = get_post_status( $post ) === 'hidden';
 		?>
 		<script>
