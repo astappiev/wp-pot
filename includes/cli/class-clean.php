@@ -6,28 +6,47 @@ use WP_CLI;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use FilesystemIterator;
+use RecursiveCallbackFilterIterator;
 
 class Clean {
+	private ?array $registered_bases = null;
 
 	/**
 	 * Clean uploads directory by removing unregistered files.
 	 *
+	 * By default only files in the uploads root and in year folders (e.g. 2024/05) are scanned,
+	 * as other folders usually belong to plugins (woocommerce_uploads, learndash, logs, etc.).
+	 *
 	 * ## OPTIONS
+	 *
+	 * [--dry-run]
+	 * : Only list unregistered files, don't delete anything.
 	 *
 	 * [--delete]
 	 * : Delete files immediately without confirmation.
 	 *
+	 * [--all]
+	 * : Scan all folders in uploads, not only year folders.
+	 *
+	 * [--exclude=<paths>]
+	 * : Comma-separated list of paths relative to uploads to skip, e.g. 2023/01,2024.
+	 *
 	 * ## EXAMPLES
 	 *
+	 *     wp pot-clean unregistered --dry-run
 	 *     wp pot-clean unregistered
 	 *     wp pot-clean unregistered --delete
+	 *     wp pot-clean unregistered --all --exclude=woocommerce_uploads,learndash
 	 *
 	 * @when after_wp_load
 	 */
 	public function unregistered( $args, $assoc_args ): void {
 		$skip_confirmation = isset( $assoc_args['delete'] );
+		$dry_run           = isset( $assoc_args['dry-run'] );
+		$scan_all          = isset( $assoc_args['all'] );
+		$excludes          = array_filter( array_map( fn( $path ) => trim( $path, " /" ), explode( ',', $assoc_args['exclude'] ?? '' ) ) );
 
-		if ( $skip_confirmation ) {
+		if ( $skip_confirmation && ! $dry_run ) {
 			WP_CLI::warning( 'Running with --delete flag - files will be deleted immediately without confirmation!' );
 		}
 
@@ -46,7 +65,7 @@ class Clean {
 		WP_CLI::log( sprintf( 'Found %d registered files in database', count( $registered_files ) ) );
 
 		// Scan uploads directory
-		$all_files = $this->scan_directory( $uploads_dir );
+		$all_files = $this->scan_directory( $uploads_dir, $scan_all, $excludes );
 		WP_CLI::log( sprintf( 'Found %d total files in uploads directory', count( $all_files ) ) );
 
 		// Find unregistered files
@@ -82,6 +101,12 @@ class Clean {
 
 		WP_CLI::log( sprintf( 'Total size to be freed: %s', $this->format_bytes( $total_size ) ) );
 
+		if ( $dry_run ) {
+			WP_CLI::success( 'Dry run, no files were deleted.' );
+
+			return;
+		}
+
 		// Ask for confirmation if not in skip-confirmation mode
 		if ( ! $skip_confirmation ) {
 			WP_CLI::confirm( sprintf( 'Do you want to permanently delete %d unregistered files?', count( $unregistered_files ) ) );
@@ -107,13 +132,13 @@ class Clean {
 		}
 
 		// Clean up empty directories
-		$this->cleanup_empty_directories( $uploads_dir );
+		$this->cleanup_empty_directories( $uploads_dir, $scan_all, $excludes );
 
 		WP_CLI::success( 'Cleanup complete!' );
 	}
 
 	/**
-	 * Get all registered file paths from WordPress database.
+	 * Get all registered file paths from WordPress database, as a set (path => true).
 	 */
 	private function get_registered_files(): array {
 		global $wpdb;
@@ -128,53 +153,80 @@ class Clean {
 
 		$files = [];
 		foreach ( $attachments as $attachment ) {
-			if ( ! empty( $attachment->meta_value ) ) {
-				$files[] = $attachment->meta_value;
-
-				// Get all generated image sizes
-				$metadata = wp_get_attachment_metadata( $attachment->ID );
-				if ( ! empty( $metadata['sizes'] ) ) {
-					$file_path = dirname( $attachment->meta_value );
-
-					foreach ( $metadata['sizes'] as $size => $size_data ) {
-						if ( ! empty( $size_data['file'] ) ) {
-							$files[] = $file_path . '/' . $size_data['file'];
-						}
-					}
-				}
-
-				// Get original file if it exists (for scaled images)
-				if ( ! empty( $metadata['original_image'] ) ) {
-					$file_path = dirname( $attachment->meta_value );
-					$files[]   = $file_path . '/' . $metadata['original_image'];
-				}
+			if ( empty( $attachment->meta_value ) ) {
+				continue;
 			}
-		}
 
-		return array_unique( $files );
-	}
+			$files[ $attachment->meta_value ] = true;
+			$file_path = dirname( $attachment->meta_value );
+			$metadata  = wp_get_attachment_metadata( $attachment->ID );
 
-	/**
-	 * Recursively scan directory and return all file paths.
-	 */
-	private function scan_directory( string $dir ): array {
-		$files    = [];
-		$iterator = new RecursiveIteratorIterator(
-			new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
-			RecursiveIteratorIterator::SELF_FIRST
-		);
+			// Get original file if it exists (for scaled images)
+			if ( ! empty( $metadata['original_image'] ) ) {
+				$files[ $file_path . '/' . $metadata['original_image'] ] = true;
+			}
 
-		foreach ( $iterator as $item ) {
-			if ( $item->isFile() ) {
-				// Skip .htaccess and index.php files
-				$filename = $item->getFilename();
-				if ( $filename !== '.htaccess' && $filename !== 'index.php' ) {
-					$files[] = $item->getPathname();
+			// Get all generated image sizes, and their additional formats (e.g. WebP "sources" from webp-uploads)
+			$items = array_merge( [ $metadata ?: [] ], $metadata['sizes'] ?? [] );
+			foreach ( $items as $item ) {
+				if ( ! empty( $item['file'] ) ) {
+					$files[ $file_path . '/' . wp_basename( $item['file'] ) ] = true;
+				}
+
+				foreach ( $item['sources'] ?? [] as $source ) {
+					if ( ! empty( $source['file'] ) ) {
+						$files[ $file_path . '/' . $source['file'] ] = true;
+					}
 				}
 			}
 		}
 
 		return $files;
+	}
+
+	/**
+	 * Recursively scan directory and return all file paths.
+	 */
+	private function scan_directory( string $dir, bool $scan_all, array $excludes ): array {
+		$files = [];
+
+		foreach ( $this->get_iterator( $dir, $scan_all, $excludes, RecursiveIteratorIterator::LEAVES_ONLY ) as $item ) {
+			// Skip .htaccess and index.php files
+			$filename = $item->getFilename();
+			if ( $item->isFile() && $filename !== '.htaccess' && $filename !== 'index.php' ) {
+				$files[] = $item->getPathname();
+			}
+		}
+
+		return $files;
+	}
+
+	/**
+	 * Iterate uploads, skipping excluded paths and (unless $scan_all) top-level folders other than years.
+	 */
+	private function get_iterator( string $dir, bool $scan_all, array $excludes, int $mode ): RecursiveIteratorIterator {
+		return new RecursiveIteratorIterator(
+			new RecursiveCallbackFilterIterator(
+				new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
+				function ( $item ) use ( $dir, $scan_all, $excludes ) {
+					$relative = ltrim( substr( $item->getPathname(), strlen( $dir ) ), '/' );
+
+					foreach ( $excludes as $exclude ) {
+						if ( $relative === $exclude || str_starts_with( $relative, $exclude . '/' ) ) {
+							return false;
+						}
+					}
+
+					// Top-level folders other than years usually belong to plugins
+					if ( ! $scan_all && $item->isDir() && ! str_contains( $relative, '/' ) ) {
+						return (bool) preg_match( '/^\d{4}$/', $relative );
+					}
+
+					return true;
+				}
+			),
+			$mode
+		);
 	}
 
 	/**
@@ -185,7 +237,7 @@ class Clean {
 		$relative_path = str_replace( '\\', '/', $relative_path );
 
 		// Direct match
-		if ( in_array( $relative_path, $registered_files, true ) ) {
+		if ( isset( $registered_files[ $relative_path ] ) ) {
 			return true;
 		}
 
@@ -202,27 +254,40 @@ class Clean {
 		$base_filename = preg_replace( '/-\d+$/', '', $base_filename ); // Remove -1, -2, etc.
 
 		// Check if the base file is registered
-		$base_path = $dir . $base_filename . $extension;
-		if ( in_array( $base_path, $registered_files, true ) ) {
+		if ( isset( $registered_files[ $dir . $base_filename . $extension ] ) ) {
 			return true;
 		}
 
-		// Check if any registered file starts with this base name
+		// Check if any registered file in the same directory starts with this base name
 		// This catches generated thumbnails that might have different patterns
-		foreach ( $registered_files as $registered ) {
-			$registered_info     = pathinfo( $registered );
-			$registered_dir      = ! empty( $registered_info['dirname'] ) && $registered_info['dirname'] !== '.' ? $registered_info['dirname'] . '/' : '';
-			$registered_filename = $registered_info['filename'];
-			$registered_base     = preg_replace( '/-\d+x\d+$/', '', $registered_filename );
-			$registered_base     = preg_replace( '/-scaled$/', '', $registered_base );
-
-			// If same directory and same base name, consider it registered
-			if ( $dir === $registered_dir && str_starts_with( $filename, $registered_base ) ) {
+		foreach ( $this->get_registered_bases( $registered_files )[ $dir ] ?? [] as $registered_base ) {
+			if ( str_starts_with( $filename, $registered_base ) ) {
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	/**
+	 * Registered file names without size suffixes, grouped by directory.
+	 */
+	private function get_registered_bases( array $registered_files ): array {
+		if ( isset( $this->registered_bases ) ) {
+			return $this->registered_bases;
+		}
+
+		$this->registered_bases = [];
+		foreach ( array_keys( $registered_files ) as $registered ) {
+			$registered_info = pathinfo( $registered );
+			$registered_dir  = ! empty( $registered_info['dirname'] ) && $registered_info['dirname'] !== '.' ? $registered_info['dirname'] . '/' : '';
+			$registered_base = preg_replace( '/-\d+x\d+$/', '', $registered_info['filename'] );
+			$registered_base = preg_replace( '/-scaled$/', '', $registered_base );
+
+			$this->registered_bases[ $registered_dir ][ $registered_base ] = $registered_base;
+		}
+
+		return $this->registered_bases;
 	}
 
 	/**
@@ -241,11 +306,8 @@ class Clean {
 	/**
 	 * Remove empty directories recursively.
 	 */
-	private function cleanup_empty_directories( string $dir ): void {
-		$iterator = new RecursiveIteratorIterator(
-			new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
-			RecursiveIteratorIterator::CHILD_FIRST
-		);
+	private function cleanup_empty_directories( string $dir, bool $scan_all, array $excludes ): void {
+		$iterator = $this->get_iterator( $dir, $scan_all, $excludes, RecursiveIteratorIterator::CHILD_FIRST );
 
 		$removed = 0;
 		foreach ( $iterator as $item ) {
