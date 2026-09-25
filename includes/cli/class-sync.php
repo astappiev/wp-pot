@@ -35,6 +35,17 @@ class Sync {
 	 * @when after_wp_load
 	 */
 	public function siteurl( $args, $assoc_args ): void {
+		try {
+			$this->replace_siteurl( $assoc_args );
+		} catch ( Exception $e ) {
+			WP_CLI::error( $e->getMessage() );
+		}
+	}
+
+	/**
+	 * Throws instead of exiting, so callers can clean up on failure.
+	 */
+	private function replace_siteurl( array $assoc_args ): void {
 		global $wpdb;
 
 		// Get current URL from database (stored in options table)
@@ -43,14 +54,14 @@ class Sync {
 		);
 
 		if ( empty( $db_url ) ) {
-			WP_CLI::error( 'Could not retrieve siteurl from database.' );
+			throw new RuntimeException( 'Could not retrieve siteurl from database.' );
 		}
 
 		// Get current URL from wp-config.php (WP_HOME constant)
 		$config_url = defined( 'WP_HOME' ) ? WP_HOME : get_option( 'home' );
 
 		if ( empty( $config_url ) ) {
-			WP_CLI::error( 'Could not retrieve home URL from configuration.' );
+			throw new RuntimeException( 'Could not retrieve home URL from configuration.' );
 		}
 
 		WP_CLI::log( "Database URL: {$db_url}" );
@@ -79,15 +90,18 @@ class Sync {
 			WP_CLI::log( $result->stdout );
 		}
 
-		if ( $result->return_code === 0 ) {
-			WP_CLI::success( "Successfully replaced '{$db_url}' with '{$config_url}' in all tables." );
-			$this->update_polylang_domains( $db_url, $config_url );
-		} else {
+		if ( $result->return_code !== 0 ) {
 			if ( ! empty( $result->stderr ) ) {
 				WP_CLI::log( $result->stderr );
 			}
-			WP_CLI::error( 'Search-replace operation failed.' );
+			throw new RuntimeException( 'Search-replace operation failed.' );
 		}
+
+		// The database was changed directly, drop stale values from the object cache (e.g. Redis).
+		wp_cache_flush();
+
+		WP_CLI::success( "Successfully replaced '{$db_url}' with '{$config_url}' in all tables." );
+		$this->update_polylang_domains( $db_url, $config_url );
 	}
 
 	/**
@@ -141,12 +155,16 @@ class Sync {
 
 		WP_CLI::line( WP_CLI::colorize( "%BPulling from {$this->alias['name']}%n" ) );
 
+		$backup_path = null;
+		$failure     = null;
+
 		try {
 			WP_CLI::run_command( [ 'maintenance-mode', 'activate' ], [ 'force' => true ] );
 
 			$target_path = $this->options['backup_dir'] . '/backup_' . $this->current_date . '.sql';
 			WP_CLI::log( 'Backing up database' );
 			$this->run_local( "db export $target_path --single-transaction" );
+			$backup_path = $target_path;
 
 			$path = $this->options['backup_dir'] . '/pull_' . $this->current_date . '.sql';
 			WP_CLI::log( "Pulling database from {$this->alias['name']}" );
@@ -160,15 +178,27 @@ class Sync {
 			WP_CLI::log( 'Importing database to local site' );
 			$this->run_local( "db import $path" );
 
+			WP_CLI::log( 'Flushing object cache' );
+			$this->run_local( 'cache flush' );
+
 			WP_CLI::log( 'Replacing site URL' );
-			$this->siteurl( [], [ 'yes' => true ] );
+			$this->replace_siteurl( [ 'yes' => true ] );
 
 			$this->plugins_management();
 			$this->sync_uploads();
 		} catch ( Exception $e ) {
-			WP_CLI::error( $e->getMessage() );
+			// WP_CLI::error() exits, which would skip `finally`, so report after cleanup.
+			$failure = $e;
 		} finally {
 			WP_CLI::run_command( [ 'maintenance-mode', 'deactivate' ] );
+		}
+
+		if ( $failure ) {
+			if ( $backup_path ) {
+				WP_CLI::warning( "Local database may be incomplete. Backup made before the pull: $backup_path" );
+				WP_CLI::log( "To restore it, run: wp db import $backup_path" );
+			}
+			WP_CLI::error( $failure->getMessage() );
 		}
 
 		if ( $this->errors_count > 0 ) {
@@ -202,7 +232,7 @@ class Sync {
 		}
 
 		$alias_data['name']        = $alias;
-		$alias_data['append_args'] = [ '--ssh=' . $alias_data['ssh'] . ':' . $alias_data['path'] ];
+		$alias_data['append_args'] = [ '--ssh=' . $alias_data['ssh'] . $alias_data['path'] ];
 		$this->alias               = $alias_data;
 
 		$this->check_connection();
@@ -425,10 +455,30 @@ class Sync {
 
 	private function build_rsync_command( string $uploads_folder ): string {
 		$excludes = $this->build_rsync_excludes();
-		$remote_path = $this->alias['ssh'] . ':' . $this->alias['path'] . '/' . $uploads_folder . '/';
+		[ $ssh_host, $port ] = $this->split_ssh_target( $this->alias['ssh'] );
+		$remote_path = $ssh_host . ':' . $this->alias['path'] . '/' . $uploads_folder . '/';
 		$local_path = './' . $uploads_folder . '/';
+		$ssh_opt = $port ? sprintf( ' -e %s', escapeshellarg( 'ssh -p ' . $port ) ) : '';
 
-		return sprintf( 'rsync -avhP %s %s%s', $remote_path, $local_path, $excludes );
+		// WP_CLI::launch() runs the command with a stripped environment, so the
+		// SSH agent socket (needed for key-based auth) has to be passed through explicitly.
+		$env = sprintf( 'SSH_AUTH_SOCK=%s HOME=%s ', escapeshellarg( (string) getenv( 'SSH_AUTH_SOCK' ) ), escapeshellarg( (string) getenv( 'HOME' ) ) );
+
+		return sprintf( '%srsync -avhP%s %s %s%s', $env, $ssh_opt, $remote_path, $local_path, $excludes );
+	}
+
+	/**
+	 * Split a `user@host[:port]` SSH target into its host and port parts.
+	 *
+	 * @param string $ssh The SSH target, e.g. `user@host:port`.
+	 * @return array{0: string, 1: ?string}
+	 */
+	private function split_ssh_target( string $ssh ): array {
+		if ( preg_match( '/^(?<host>.+):(?<port>\d+)$/', $ssh, $matches ) ) {
+			return [ $matches['host'], $matches['port'] ];
+		}
+
+		return [ $ssh, null ];
 	}
 
 	private function build_rsync_excludes(): string {
