@@ -7,6 +7,8 @@ use Pot\POT_Module;
 defined( '\\ABSPATH' ) || exit;
 
 class Media_Replace extends POT_Module {
+	private const string VERSION_META_KEY = '_pot_media_replaced';
+
 	protected string $name = 'Media Replace';
 	protected string $description = 'Replace media files while maintaining the same attachment ID.';
 	protected string $category = 'media';
@@ -16,8 +18,8 @@ class Media_Replace extends POT_Module {
 		add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
 		add_action( 'edit_attachment', [ $this, 'edit_attachment' ] );
 		add_filter( 'attachment_fields_to_edit', [ $this, 'attachment_fields' ], 10, 2 );
-		add_filter( 'wp_calculate_image_srcset', [ $this, 'calculate_image_srcset' ] );
-		add_filter( 'wp_get_attachment_image_src', [ $this, 'get_attachment_image_src' ] );
+		add_filter( 'wp_calculate_image_srcset', [ $this, 'calculate_image_srcset' ], 10, 5 );
+		add_filter( 'wp_get_attachment_image_src', [ $this, 'get_attachment_image_src' ], 10, 2 );
 		add_filter( 'wp_prepare_attachment_for_js', [ $this, 'prepare_attachment_for_js' ] );
 	}
 
@@ -25,8 +27,9 @@ class Media_Replace extends POT_Module {
 		wp_enqueue_script( 'wp-pot-media-replace', plugins_url( '../../assets/js/media-replace.js', __FILE__ ), [ 'jquery' ], WP_POT_VERSION, true );
 	}
 
-	public function edit_attachment( $postId ): bool {
-		if ( empty( $_POST['replaceWith'] ) || ! is_numeric( $_POST['replaceWith'] ) ) {
+	public function edit_attachment( $post_id ): bool {
+		$replace_id = absint( $_POST['replaceWith'] ?? 0 );
+		if ( ! $replace_id || $replace_id === $post_id ) {
 			return false;
 		}
 
@@ -34,71 +37,80 @@ class Media_Replace extends POT_Module {
 			return false;
 		}
 
-		if ( ! current_user_can( 'edit_post', $postId ) ) {
+		if ( ! current_user_can( 'edit_post', $post_id ) || get_post_type( $replace_id ) !== 'attachment' ) {
 			return false;
 		}
 
-		$uploadDir = wp_upload_dir();
-		$newFile   = $uploadDir['basedir'] . '/' . get_post_meta( $_POST['replaceWith'], '_wp_attached_file', true );
+		// Use unscaled originals, so WordPress can regenerate "-scaled" and all sub-sizes.
+		$new_file = wp_get_original_image_path( $replace_id ) ?: get_attached_file( $replace_id );
+		$old_file = wp_get_original_image_path( $post_id ) ?: get_attached_file( $post_id );
 
-		if ( ! is_file( $newFile ) ) {
+		if ( ! $new_file || ! is_file( $new_file ) || ! $old_file ) {
 			return false;
 		}
 
-		$this->delete_attachment( $postId );
-
-		$oldFile = $uploadDir['basedir'] . '/' . get_post_meta( $postId, '_wp_attached_file', true );
-		if ( ! file_exists( dirname( $oldFile ) ) ) {
-			wp_mkdir_p( dirname( $oldFile ) );
+		// Copy first, so the current files are only deleted when the replacement is in place.
+		$target_dir = dirname( $old_file );
+		$tmp_file   = $old_file . '.pot-replace.tmp';
+		if ( ! @copy( $new_file, $tmp_file ) ) {
+			return false;
 		}
 
-		global $wp_filesystem;
-		if ( WP_Filesystem() && $wp_filesystem->copy( $newFile, $oldFile ) ) {
-			$meta = wp_generate_attachment_metadata( $postId, $oldFile );
-			wp_update_attachment_metadata( $postId, $meta );
+		$this->delete_attachment_files( $post_id );
 
-			if ( current_user_can( 'delete_post', $_POST['replaceWith'] ) ) {
-				wp_delete_attachment( $_POST['replaceWith'], true );
-			}
+		// Keep the old file name, but take the extension of the new file, so the content always matches the extension.
+		$new_ext = strtolower( pathinfo( $new_file, PATHINFO_EXTENSION ) );
+		$target  = $old_file;
+		if ( $new_ext !== strtolower( pathinfo( $old_file, PATHINFO_EXTENSION ) ) ) {
+			$target = $target_dir . '/' . wp_unique_filename( $target_dir, pathinfo( $old_file, PATHINFO_FILENAME ) . '.' . $new_ext );
+		}
+
+		if ( ! @rename( $tmp_file, $target ) ) {
+			@unlink( $tmp_file );
+
+			return false;
+		}
+
+		update_attached_file( $post_id, $target );
+		delete_post_meta( $post_id, '_wp_attachment_backup_sizes' );
+
+		$mime = wp_check_filetype( $target )['type'];
+		if ( $mime && $mime !== get_post_mime_type( $post_id ) ) {
+			global $wpdb;
+			// Direct update, as wp_update_post() would trigger this hook again.
+			$wpdb->update( $wpdb->posts, [ 'post_mime_type' => $mime ], [ 'ID' => $post_id ] );
+			clean_post_cache( $post_id );
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/image.php';
+		wp_update_attachment_metadata( $post_id, wp_generate_attachment_metadata( $post_id, $target ) );
+		update_post_meta( $post_id, self::VERSION_META_KEY, time() );
+
+		if ( current_user_can( 'delete_post', $replace_id ) ) {
+			wp_delete_attachment( $replace_id, true );
 		}
 
 		return true;
 	}
 
-	private function delete_attachment( $post_id ): void {
+	private function delete_attachment_files( int $post_id ): void {
 		$meta         = wp_get_attachment_metadata( $post_id );
 		$backup_sizes = get_post_meta( $post_id, '_wp_attachment_backup_sizes', true );
 		$file         = get_attached_file( $post_id );
+		$dir          = dirname( $file );
 
-		if ( is_multisite() ) {
-			delete_transient( 'dirsize_cache' );
-		}
-
-		$uploadpath = wp_get_upload_dir();
-
-		if ( ! empty( $meta['thumb'] ) ) {
-			$thumbfile = str_replace( basename( $file ), $meta['thumb'], $file );
-			$thumbfile = apply_filters( 'wp_delete_file', $thumbfile );
-			@unlink( path_join( $uploadpath['basedir'], $thumbfile ) );
-		}
-
-		if ( isset( $meta['sizes'] ) && is_array( $meta['sizes'] ) ) {
-			foreach ( $meta['sizes'] as $size => $sizeinfo ) {
-				$intermediate_file = str_replace( basename( $file ), $sizeinfo['file'], $file );
-				$intermediate_file = apply_filters( 'wp_delete_file', $intermediate_file );
-				@unlink( path_join( $uploadpath['basedir'], $intermediate_file ) );
+		// Additional formats (e.g. WebP from webp-uploads) are stored as "sources" and not removed by core.
+		$sources = array_merge( [ $meta['sources'] ?? [] ], array_column( $meta['sizes'] ?? [], 'sources' ) );
+		foreach ( $sources as $source ) {
+			foreach ( (array) $source as $properties ) {
+				if ( ! empty( $properties['file'] ) ) {
+					wp_delete_file_from_directory( path_join( $dir, $properties['file'] ), $dir );
+				}
 			}
 		}
 
-		if ( is_array( $backup_sizes ) ) {
-			foreach ( $backup_sizes as $size ) {
-				$del_file = path_join( dirname( $meta['file'] ), $size['file'] );
-				$del_file = apply_filters( 'wp_delete_file', $del_file );
-				@unlink( path_join( $uploadpath['basedir'], $del_file ) );
-			}
-		}
-
-		wp_delete_file( $file );
+		// Removes the main file, the original of scaled images, sub-sizes and edit backups.
+		wp_delete_attachment_files( $post_id, $meta, $backup_sizes, $file );
 	}
 
 	public function attachment_fields( $fields, $attachment ): array {
@@ -119,41 +131,40 @@ class Media_Replace extends POT_Module {
 		return $fields;
 	}
 
-	public function calculate_image_srcset( $sources ): array {
-		if ( is_admin() ) {
-			foreach ( $sources as $size => $source ) {
-				$source['url']    .= ( ! str_contains( $source['url'], '?' ) ? '?' : '&' ) . '_t=' . time();
-				$sources[ $size ] = $source;
-			}
+	public function calculate_image_srcset( $sources, $size_array, $image_src, $image_meta, $attachment_id ): array {
+		foreach ( $sources as $size => $source ) {
+			$sources[ $size ]['url'] = $this->versioned_url( $source['url'], $attachment_id );
 		}
 
 		return $sources;
 	}
 
-	public function get_attachment_image_src( $attr ): array|false {
-		if ( $attr === false ) {
-			return false;
+	public function get_attachment_image_src( $image, $attachment_id ): array|false {
+		if ( ! empty( $image[0] ) ) {
+			$image[0] = $this->versioned_url( $image[0], $attachment_id );
 		}
 
-		if ( is_admin() && ! empty( $attr[0] ) ) {
-			$attr[0] .= ( ! str_contains( $attr[0], '?' ) ? '?' : '&' ) . '_t=' . time();
-		}
-
-		return $attr;
+		return $image;
 	}
 
 	public function prepare_attachment_for_js( $response ): array {
-		if ( is_admin() ) {
-			if ( str_contains( $response['url'], '?' ) ) {
-				$response['url'] .= ( ! str_contains( $response['url'], '?' ) ? '?' : '&' ) . '_t=' . time();
-			}
-			if ( isset( $response['sizes'] ) ) {
-				foreach ( $response['sizes'] as $sizeName => $size ) {
-					$response['sizes'][ $sizeName ]['url'] .= ( ! str_contains( $size['url'], '?' ) ? '?' : '&' ) . '_t=' . time();
-				}
-			}
+		if ( ! empty( $response['url'] ) ) {
+			$response['url'] = $this->versioned_url( $response['url'], $response['id'] );
+		}
+
+		foreach ( $response['sizes'] ?? [] as $size_name => $size ) {
+			$response['sizes'][ $size_name ]['url'] = $this->versioned_url( $size['url'], $response['id'] );
 		}
 
 		return $response;
+	}
+
+	/**
+	 * Bust browser and CDN caches for replaced files, as they keep the same URL.
+	 */
+	private function versioned_url( string $url, int $attachment_id ): string {
+		$version = get_post_meta( $attachment_id, self::VERSION_META_KEY, true );
+
+		return $version ? add_query_arg( 'v', $version, $url ) : $url;
 	}
 }
