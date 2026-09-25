@@ -17,6 +17,8 @@ class Hidden_Post_Status extends POT_Module {
 		add_action( 'post_submitbox_misc_actions', [ $this, 'classic_editor_js' ] );
 		add_action( 'admin_footer-edit.php', [ $this, 'quick_edit_js' ] );
 		add_filter( 'display_post_states', [ $this, 'display_post_states' ], 10, 2 );
+		add_filter( 'posts_where', [ $this, 'exclude_from_listings' ], 10, 2 );
+		add_filter( 'wp_robots', [ $this, 'noindex' ] );
 	}
 
 	public function register_post_status(): void {
@@ -37,6 +39,28 @@ class Hidden_Post_Status extends POT_Module {
 				),
 			]
 		);
+	}
+
+	/**
+	 * Public statuses are included in all non-singular queries by WP_Query, so exclude hidden posts explicitly.
+	 * Admin lists, singular views and queries requesting specific statuses are left untouched.
+	 */
+	public function exclude_from_listings( string $where, \WP_Query $query ): string {
+		if ( ( is_admin() && ! wp_doing_ajax() ) || $query->is_singular() || ! empty( $query->get( 'post_status' ) ) ) {
+			return $where;
+		}
+
+		global $wpdb;
+
+		return $where . " AND {$wpdb->posts}.post_status <> 'hidden'";
+	}
+
+	public function noindex( array $robots ): array {
+		if ( is_singular() && get_post_status() === 'hidden' ) {
+			$robots['noindex'] = true;
+		}
+
+		return $robots;
 	}
 
 	public function classic_editor_js( $post = null ): void {
